@@ -1577,6 +1577,9 @@ public class HFileReaderImpl implements HFile.Reader, Configurable {
       // verification.
       return;
     }
+    if (actualBlockType == expectedBlockType) return;
+    if (expectedBlockType == BlockType.LEAF_INDEX)
+      expectedBlockType = BlockType.LEAF_INDEX_TRIES;
     if (actualBlockType != expectedBlockType) {
       throw new IOException("Expected block type " + expectedBlockType + ", " +
           "but got " + actualBlockType + ": " + block + ", path=" + path);

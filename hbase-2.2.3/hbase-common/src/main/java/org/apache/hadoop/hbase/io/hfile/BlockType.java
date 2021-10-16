@@ -51,6 +51,9 @@ public enum BlockType {
 
   /** Version 2 leaf index block. Appears in the data block section */
   LEAF_INDEX("IDXLEAF2", BlockCategory.INDEX),
+  
+  /** Tries leaf index block. Appears in the data block section */
+  LEAF_INDEX_TRIES("TRIELEAF", BlockCategory.INDEX),
 
   /** Bloom filter block, version 2 */
   BLOOM_CHUNK("BLMFBLK2", BlockCategory.BLOOM),

@@ -565,4 +565,6 @@ public abstract class ByteBuff {
     }
     return result.toString();
   }
+
+  public abstract LittleEndianByteBuffReader toLittleEndianReader();
 }

@@ -161,6 +161,7 @@ public class CacheStats {
         dataMissCount.increment();
         break;
       case LEAF_INDEX:
+      case LEAF_INDEX_TRIES:
         leafIndexMissCount.increment();
         break;
       case BLOOM_CHUNK:
@@ -209,6 +210,7 @@ public class CacheStats {
         dataHitCount.increment();
         break;
       case LEAF_INDEX:
+      case LEAF_INDEX_TRIES:
         leafIndexHitCount.increment();
         break;
       case BLOOM_CHUNK:

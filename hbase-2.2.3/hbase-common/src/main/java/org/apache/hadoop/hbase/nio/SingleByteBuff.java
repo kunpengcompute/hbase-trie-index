@@ -19,6 +19,7 @@ package org.apache.hadoop.hbase.nio;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.ReadableByteChannel;
 
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
@@ -41,7 +42,7 @@ public class SingleByteBuff extends ByteBuff {
   private static final boolean UNSAFE_UNALIGNED = UnsafeAvailChecker.unaligned();
 
   // Underlying BB
-  private final ByteBuffer buf;
+  protected final ByteBuffer buf;
 
   // To access primitive values from underlying ByteBuffer using Unsafe
   private long unsafeOffset;
@@ -337,5 +338,34 @@ public class SingleByteBuff extends ByteBuff {
   @VisibleForTesting
   public ByteBuffer getEnclosingByteBuffer() {
     return this.buf;
+  }
+
+  @Override
+  public LittleEndianByteBuffReader toLittleEndianReader() {
+    final ByteBuffer newBuffer = buf.duplicate().order(ByteOrder.LITTLE_ENDIAN);
+    return new LittleEndianByteBuffReader() {
+      @Override
+      public long getLittleEndianLong(int index) {
+        if (!UNSAFE_UNALIGNED || unsafeRef == null) {
+          return newBuffer.getLong(index);
+        }
+        long ret = UnsafeAccess.theUnsafe.getLong(unsafeRef, unsafeOffset + index);
+        return UnsafeAccess.LITTLE_ENDIAN ? ret : Long.reverseBytes(ret);
+      }
+
+      @Override
+      public int getLittleEndianInt(int index) {
+        if (!UNSAFE_UNALIGNED || unsafeRef == null) {
+          return newBuffer.getInt(index);
+        }
+        int ret = UnsafeAccess.theUnsafe.getInt(unsafeRef, unsafeOffset + index);
+        return UnsafeAccess.LITTLE_ENDIAN ? ret : Integer.reverseBytes(ret);
+      }
+
+      @Override
+      public byte get(int index) {
+        return SingleByteBuff.this.get(index);
+      }
+    };
   }
 }

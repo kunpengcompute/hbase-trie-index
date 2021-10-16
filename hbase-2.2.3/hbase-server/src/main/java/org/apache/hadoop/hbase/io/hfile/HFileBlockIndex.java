@@ -47,6 +47,7 @@ import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.io.hfile.HFile.CachingBlockReader;
 import org.apache.hadoop.hbase.nio.ByteBuff;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.KeyValueScanner;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
@@ -362,6 +363,19 @@ public class HFileBlockIndex {
           // Locate the entry corresponding to the given key in the non-root
           // (leaf or intermediate-level) index block.
           ByteBuff buffer = block.getBufferWithoutHeader();
+          if (block.getBlockType() == BlockType.LEAF_INDEX_TRIES) {
+            ValueInfo blockInfo = LoudsTriesService.INSTANCE.get(buffer, key);
+            if (blockInfo != null) {
+              currentOffset = blockInfo.blockOffset;
+              currentOnDiskSize = blockInfo.blockLength;
+            } else {
+              // This has to be changed
+              // For now change this to key value
+              throw new IOException("The key " + CellUtil.getCellKeyAsString(key) + " is before the"
+                  + " first key of the non-root index block " + block);
+            }
+            continue;
+          }
           index = locateNonRootIndexEntry(buffer, key, comparator);
           if (index == -1) {
             // This has to be changed
@@ -374,7 +388,8 @@ public class HFileBlockIndex {
           currentOffset = buffer.getLong();
           currentOnDiskSize = buffer.getInt();
 
-          // Only update next indexed key if there is a next indexed key in the current level
+          // Only update next indexed key if there is a next indexed key in
+          // the current level
           byte[] nonRootIndexedKey = getNonRootIndexedKey(buffer, index + 1);
           if (nonRootIndexedKey != null) {
             tmpNextIndexKV.setKey(nonRootIndexedKey, 0, nonRootIndexedKey.length);
@@ -1307,7 +1322,13 @@ public class HFileBlockIndex {
 
       // Write the inline block index to the output stream in the non-root
       // index block format.
-      curInlineChunk.writeNonRoot(out);
+      if (HRegionServer.WRITE_TRIES_INDEX) {
+        LoudsTriesService.INSTANCE.build(curInlineChunk.getBlockKeyList(),
+            curInlineChunk.getBlockOffsetList().stream().mapToLong(l -> l).toArray(),
+            curInlineChunk.getOnDiskDataSizeList().stream().mapToInt(i -> i).toArray(), out);
+      } else {
+        curInlineChunk.writeNonRoot(out);
+      }
 
       // Save the first key of the inline block so that we can add it to the
       // parent-level index.
@@ -1350,7 +1371,7 @@ public class HFileBlockIndex {
 
     @Override
     public BlockType getInlineBlockType() {
-      return BlockType.LEAF_INDEX;
+      return HRegionServer.WRITE_TRIES_INDEX ? BlockType.LEAF_INDEX_TRIES : BlockType.LEAF_INDEX;
     }
 
     /**
@@ -1554,8 +1575,13 @@ public class HFileBlockIndex {
       long midKeySubEntry = (totalNumSubEntries - 1) / 2;
       int midKeyEntry = getEntryBySubEntry(midKeySubEntry);
 
-      baosDos.writeLong(blockOffsets.get(midKeyEntry));
-      baosDos.writeInt(onDiskDataSizes.get(midKeyEntry));
+      if (HRegionServer.WRITE_TRIES_INDEX) {
+        baosDos.writeLong((long) -1);
+        baosDos.writeInt((int) -1);
+      } else {
+        baosDos.writeLong(blockOffsets.get(midKeyEntry));
+        baosDos.writeInt(onDiskDataSizes.get(midKeyEntry));
+      }
 
       long numSubEntriesBefore = midKeyEntry > 0
           ? numSubEntriesAt.get(midKeyEntry - 1) : 0;
@@ -1672,6 +1698,19 @@ public class HFileBlockIndex {
     public int getOnDiskDataSize(int i) {
       return onDiskDataSizes.get(i);
     }
+    
+    public List<byte[]> getBlockKeyList() {
+      return blockKeys;
+    }
+
+    public List<Long> getBlockOffsetList() {
+      return blockOffsets;
+    }
+
+    public List<Integer> getOnDiskDataSizeList() {
+      return onDiskDataSizes;
+    }
+
 
     public long getCumulativeNumKV(int i) {
       if (i < 0)

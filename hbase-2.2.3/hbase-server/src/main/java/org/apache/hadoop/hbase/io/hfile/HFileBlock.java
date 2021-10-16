@@ -179,7 +179,7 @@ public class HFileBlock implements Cacheable {
    * So, we have this ByteBuff type. Unfortunately, it is spread all about HFileBlock. Would be
    * good if could be confined to cache-use only but hard-to-do.
    */
-  private ByteBuff buf;
+  protected ByteBuff buf;
 
   /** Meta data that holds meta information on the hfileblock.
    */
@@ -399,6 +399,20 @@ public class HFileBlock implements Cacheable {
     this.offset = offset;
     this.buf = buf;
     this.buf.rewind();
+  }
+  
+  public HFileBlock (HFileBlock original, ByteBuff buff, MemoryType memType) {
+    this.blockType = original.blockType;
+    this.buf = buff;
+    buff.put(0, original.buf, 0, original.buf.limit());
+    this.onDiskDataSizeWithHeader = original.onDiskDataSizeWithHeader;
+    this.uncompressedSizeWithoutHeader = original.uncompressedSizeWithoutHeader;
+    this.prevBlockOffset = original.prevBlockOffset;
+    this.onDiskSizeWithoutHeader = original.onDiskSizeWithoutHeader;
+    this.fileContext = original.fileContext;
+    this.offset = original.offset;
+    this.memType = memType;
+    this.nextBlockOnDiskSize = original.nextBlockOnDiskSize;
   }
 
   /**

@@ -21,11 +21,13 @@ import static org.apache.hadoop.hbase.HConstants.BUCKET_CACHE_IOENGINE_KEY;
 import static org.apache.hadoop.hbase.HConstants.BUCKET_CACHE_SIZE_KEY;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
 import org.apache.hadoop.hbase.io.util.MemorySizeUtil;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.yetus.audience.InterfaceAudience;
@@ -134,6 +136,18 @@ public final class BlockCacheFactory {
     LOG.info(
         "Allocating onheap LruBlockCache size=" + StringUtils.byteDesc(cacheSize) + ", blockSize="
             + StringUtils.byteDesc(blockSize));
+    
+    try {
+      if (c.getBoolean(LruBlockCache.TRIES_USE_OFFHEAP_KEY, LruBlockCache.DEF_TRIES_USE_OFFHEAP)) {
+        return (LruBlockCache) Class.forName("org.apache.hadoop.hbase.io.hfile.LoudsTriesLruBlockCache")
+            .getDeclaredConstructor(long.class, long.class, boolean.class, Configuration.class)
+            .newInstance(cacheSize, blockSize, true, c);
+      }
+    } catch (InstantiationException | IllegalAccessException | IllegalArgumentException | InvocationTargetException
+        | NoSuchMethodException | SecurityException | ClassNotFoundException e) {
+      e.printStackTrace();
+      c.setBoolean(LruBlockCache.TRIES_USE_OFFHEAP_KEY, false);
+    }
     return new LruBlockCache(cacheSize, blockSize, true, c);
   }
 

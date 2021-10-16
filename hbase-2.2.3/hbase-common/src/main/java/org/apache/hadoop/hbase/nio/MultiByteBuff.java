@@ -1062,4 +1062,24 @@ public class MultiByteBuff extends ByteBuff {
   public ByteBuffer[] getEnclosingByteBuffers() {
     return this.items;
   }
+
+  @Override
+  public LittleEndianByteBuffReader toLittleEndianReader() {
+    return new LittleEndianByteBuffReader() {
+      @Override
+      public long getLittleEndianLong(int index) {
+        return Long.reverseBytes(getLong(index));
+      }
+
+      @Override
+      public int getLittleEndianInt(int index) {
+        return Integer.reverseBytes(getInt(index));
+      }
+
+      @Override
+      public byte get(int index) {
+        return MultiByteBuff.this.get(index);
+      }
+    };
+  }
 }

@@ -380,8 +380,12 @@ public class CombinedBlockCache implements ResizableBlockCache, HeapSize {
 
   @Override
   public void returnBlock(BlockCacheKey cacheKey, Cacheable block) {
-    // returnBlock is meaningful for L2 cache alone.
-    this.l2Cache.returnBlock(cacheKey, block);
+    boolean metaBlock = block.getBlockType().getCategory() != BlockCategory.DATA;
+    if (metaBlock) {
+      onHeapCache.returnBlock(cacheKey, block);
+    } else {
+      l2Cache.returnBlock(cacheKey, block);
+    }
   }
 
   @VisibleForTesting

@@ -35,10 +35,12 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.HasThread;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.yarn.webapp.hamlet.Hamlet.HR;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -126,6 +128,8 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
    */
   private static final String LRU_IN_MEMORY_FORCE_MODE_CONFIG_NAME =
       "hbase.lru.rs.inmemoryforcemode";
+  
+  static final String TRIES_USE_OFFHEAP_KEY = "hbase.tries.use-offheap";
 
   /* Default Configuration Parameters*/
 
@@ -146,13 +150,15 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
 
   private static final boolean DEFAULT_IN_MEMORY_FORCE_MODE = false;
 
+  static final boolean DEF_TRIES_USE_OFFHEAP = false;
+
   /* Statistics thread */
   private static final int STAT_THREAD_PERIOD = 60 * 5;
   private static final String LRU_MAX_BLOCK_SIZE = "hbase.lru.max.block.size";
   private static final long DEFAULT_MAX_BLOCK_SIZE = 16L * 1024L * 1024L;
 
   /** Concurrent map (the cache) */
-  private transient final Map<BlockCacheKey, LruCachedBlock> map;
+  protected transient final Map<BlockCacheKey, LruCachedBlock> map;
 
   /** Eviction lock (locked when eviction in process) */
   private transient final ReentrantLock evictionLock = new ReentrantLock(true);
@@ -177,13 +183,13 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   private final LongAdder dataBlockSize;
 
   /** Current number of cached elements */
-  private final AtomicLong elements;
+  protected final AtomicLong elements;
 
   /** Current number of cached data block elements */
   private final LongAdder dataBlockElements;
 
   /** Cache access count (sequential ID) */
-  private final AtomicLong count;
+  protected final AtomicLong count;
 
   /** hard capacity limit */
   private float hardCapacityLimitFactor;
@@ -217,6 +223,8 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
 
   /** Whether in-memory hfile's data block has higher priority when evicting */
   private boolean forceInMemory;
+
+  private final boolean triesUseOffheap;
 
   /**
    * Where to send victims (blocks evicted/missing from the cache). This is used only when we use an
@@ -252,7 +260,8 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
         DEFAULT_MEMORY_FACTOR,
         DEFAULT_HARD_CAPACITY_LIMIT_FACTOR,
         false,
-        DEFAULT_MAX_BLOCK_SIZE
+        DEFAULT_MAX_BLOCK_SIZE,
+        DEF_TRIES_USE_OFFHEAP
         );
   }
 
@@ -269,12 +278,23 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
         conf.getFloat(LRU_HARD_CAPACITY_LIMIT_FACTOR_CONFIG_NAME,
                       DEFAULT_HARD_CAPACITY_LIMIT_FACTOR),
         conf.getBoolean(LRU_IN_MEMORY_FORCE_MODE_CONFIG_NAME, DEFAULT_IN_MEMORY_FORCE_MODE),
-        conf.getLong(LRU_MAX_BLOCK_SIZE, DEFAULT_MAX_BLOCK_SIZE)
+        conf.getLong(LRU_MAX_BLOCK_SIZE, DEFAULT_MAX_BLOCK_SIZE),
+        conf.getBoolean(TRIES_USE_OFFHEAP_KEY, DEF_TRIES_USE_OFFHEAP)
     );
   }
 
   public LruBlockCache(long maxSize, long blockSize, Configuration conf) {
     this(maxSize, blockSize, true, conf);
+  }
+
+  public LruBlockCache(long maxSize, long blockSize, boolean evictionThread,
+      int mapInitialSize, float mapLoadFactor, int mapConcurrencyLevel,
+      float minFactor, float acceptableFactor, float singleFactor,
+      float multiFactor, float memoryFactor, float hardLimitFactor,
+      boolean forceInMemory, long maxBlockSize) {
+    this(maxSize, blockSize, evictionThread, mapInitialSize, mapLoadFactor, mapConcurrencyLevel, minFactor,
+        acceptableFactor, singleFactor, multiFactor, memoryFactor, hardLimitFactor, forceInMemory, maxBlockSize,
+        DEF_TRIES_USE_OFFHEAP);
   }
 
   /**
@@ -296,7 +316,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
       int mapInitialSize, float mapLoadFactor, int mapConcurrencyLevel,
       float minFactor, float acceptableFactor, float singleFactor,
       float multiFactor, float memoryFactor, float hardLimitFactor,
-      boolean forceInMemory, long maxBlockSize) {
+      boolean forceInMemory, long maxBlockSize, boolean triesUseOffheap) {
     this.maxBlockSize = maxBlockSize;
     if(singleFactor + multiFactor + memoryFactor != 1 ||
         singleFactor < 0 || multiFactor < 0 || memoryFactor < 0) {
@@ -336,6 +356,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
     // every five minutes.
     this.scheduleThreadPool.scheduleAtFixedRate(new StatisticsThread(this), STAT_THREAD_PERIOD,
                                                 STAT_THREAD_PERIOD, TimeUnit.SECONDS);
+    this.triesUseOffheap = triesUseOffheap;
   }
 
   @Override
@@ -455,7 +476,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
     if (bt != null && bt.isData()) {
        dataBlockSize.add(heapsize);
     }
-    return size.addAndGet(heapsize);
+    return bt == BlockType.LEAF_INDEX_TRIES && triesUseOffheap ? size.get() : size.addAndGet(heapsize);
   }
 
   /**
@@ -473,7 +494,10 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   @Override
   public Cacheable getBlock(BlockCacheKey cacheKey, boolean caching, boolean repeat,
       boolean updateCacheMetrics) {
-    LruCachedBlock cb = map.get(cacheKey);
+    LruCachedBlock cb = map.computeIfPresent(cacheKey, (key, val) -> {
+      handleExistCacheBlock(val);
+      return val;
+    });
     if (cb == null) {
       if (!repeat && updateCacheMetrics) {
         stats.miss(caching, cacheKey.isPrimary(), cacheKey.getBlockType());
@@ -498,6 +522,9 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
     if (updateCacheMetrics) stats.hit(caching, cacheKey.isPrimary(), cacheKey.getBlockType());
     cb.access(count.incrementAndGet());
     return cb.getBuffer();
+  }
+
+  protected void handleExistCacheBlock(LruCachedBlock val) {
   }
 
   /**
@@ -622,6 +649,8 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
 
       // Scan entire map putting into appropriate buckets
       for (LruCachedBlock cachedBlock : map.values()) {
+        if (cachedBlock.getBuffer().getBlockType() == BlockType.LEAF_INDEX_TRIES && triesUseOffheap)
+          continue;
         switch (cachedBlock.getPriority()) {
           case SINGLE: {
             bucketSingle.add(cachedBlock);

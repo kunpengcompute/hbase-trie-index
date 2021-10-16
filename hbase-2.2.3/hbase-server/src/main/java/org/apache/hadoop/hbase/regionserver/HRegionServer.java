@@ -3077,6 +3077,10 @@ public class HRegionServer extends HasThread implements
     }
   }
 
+  public static final String WRITE_TRIES_KEY = "hbase.write.tries";
+  public static final boolean DEF_WRITE_TRIES = false;
+  public static boolean WRITE_TRIES_INDEX = DEF_WRITE_TRIES;
+
   /**
    * @see org.apache.hadoop.hbase.regionserver.HRegionServerCommandLine
    */
@@ -3084,6 +3088,7 @@ public class HRegionServer extends HasThread implements
     LOG.info("STARTING executorService " + HRegionServer.class.getSimpleName());
     VersionInfo.logVersion();
     Configuration conf = HBaseConfiguration.create();
+    WRITE_TRIES_INDEX = conf.getBoolean(WRITE_TRIES_KEY, DEF_WRITE_TRIES);
     @SuppressWarnings("unchecked")
     Class<? extends HRegionServer> regionServerClass = (Class<? extends HRegionServer>) conf
         .getClass(HConstants.REGION_SERVER_IMPL, HRegionServer.class);
